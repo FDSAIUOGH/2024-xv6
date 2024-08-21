@@ -6,6 +6,8 @@
 #include "memlayout.h"
 #include "spinlock.h"
 #include "proc.h"
+#include "sysinfo.h"
+
 
 uint64
 sys_exit(void)
@@ -95,3 +97,31 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+uint64 sys_trace(void) {
+    int mask;
+    // 获取整数类型的系统调用参数
+    if (argint(0, &mask) < 0) {
+        return -1;
+    }
+    // 存入proc 结构体的 mask 变量中
+    myproc()->trace_mask = mask;
+    return 0;
+}
+
+   uint64
+   sys_sysinfo(void) {
+     uint64 addr;
+     struct sysinfo info;
+   
+     if (argaddr(0, &addr) < 0) // 获取系统调用的第一个参数（指向 struct sysinfo 的指针）
+       return -1;
+   
+     info.freemem = getfreemem(); // 调用 free_mem 函数获取空闲内存数量
+     info.nproc = getnproc(); // 调用 nproc 函数获取可用进程数目
+   
+     if (copyout(myproc()->pagetable, addr, (char*)&info, sizeof(info)) < 0) // 使用 copyout 函数将信息复制回用户空间
+       return -1;
+   
+     return 0;
+   }
