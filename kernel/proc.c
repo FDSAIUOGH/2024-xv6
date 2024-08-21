@@ -101,48 +101,57 @@ allocpid() {
 // If found, initialize state required to run in the kernel,
 // and return with p->lock held.
 // If there are no free procs, or a memory allocation fails, return 0.
-static struct proc*
-allocproc(void)
-{
-  struct proc *p;
-
-  for(p = proc; p < &proc[NPROC]; p++) {
-    acquire(&p->lock);
-    if(p->state == UNUSED) {
-      goto found;
-    } else {
-      release(&p->lock);
-    }
-  }
-  return 0;
-
-found:
-  p->pid = allocpid();
-  p->state = USED;
-
-  // Allocate a trapframe page.
-  if((p->trapframe = (struct trapframe *)kalloc()) == 0){
-    freeproc(p);
-    release(&p->lock);
-    return 0;
-  }
-
-  // An empty user page table.
-  p->pagetable = proc_pagetable(p);
-  if(p->pagetable == 0){
-    freeproc(p);
-    release(&p->lock);
-    return 0;
-  }
-
-  // Set up new context to start executing at forkret,
-  // which returns to user space.
-  memset(&p->context, 0, sizeof(p->context));
-  p->context.ra = (uint64)forkret;
-  p->context.sp = p->kstack + PGSIZE;
-
-  return p;
-}
+   static struct proc*
+   allocproc(void)
+   {
+     struct proc *p;
+   
+     for(p = proc; p < &proc[NPROC]; p++) {
+       acquire(&p->lock);
+       if(p->state == UNUSED) {
+         goto found;
+       } else {
+         release(&p->lock);
+       }
+     }
+     return 0;
+   
+   found:
+     p->pid = allocpid();
+     p->state = USED;
+   
+     // Allocate a trapframe page.
+     if((p->trapframe = (struct trapframe *)kalloc()) == 0){
+       freeproc(p);
+       release(&p->lock);
+       return 0;
+     }
+     ////Allocate an usyscall page
+     if ((p->usyscallpage = (struct usyscall *)kalloc()) == 0) {
+       freeproc(p);
+       release(&p->lock);
+       return 0;
+     }
+   
+     // An empty user page table.
+     p->pagetable = proc_pagetable(p);
+     if(p->pagetable == 0){
+       freeproc(p);
+       release(&p->lock);
+       return 0;
+     }
+     
+   
+     // Set up new context to start executing at forkret,
+     // which returns to user space.
+     memset(&p->context, 0, sizeof(p->context));
+     p->context.ra = (uint64)forkret;
+     p->context.sp = p->kstack + PGSIZE;
+   
+     p->usyscallpage->pid = p->pid; ////
+   
+     return p;
+   }
 
 // free a proc structure and the data hanging from it,
 // including user pages.
@@ -155,6 +164,8 @@ freeproc(struct proc *p)
   p->trapframe = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
+  if (p->usyscallpage) kfree((void *)p->usyscallpage);
+    p->usyscallpage = 0;
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -196,6 +207,15 @@ proc_pagetable(struct proc *p)
     return 0;
   }
 
+     //map the usyscall page
+     if (mappages(pagetable, USYSCALL, PGSIZE, (uint64)(p->usyscallpage),
+                    PTE_R | PTE_U) < 0) {
+           uvmunmap(pagetable, TRAMPOLINE, 1, 0);
+           uvmunmap(pagetable, TRAPFRAME, 1, 0);
+           uvmfree(pagetable, 0);
+           return 0;
+       }
+
   return pagetable;
 }
 
@@ -206,6 +226,8 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
 {
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
+  uvmunmap(pagetable, USYSCALL, 1, 0);
+
   uvmfree(pagetable, sz);
 }
 
