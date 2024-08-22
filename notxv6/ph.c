@@ -17,6 +17,7 @@ struct entry *table[NBUCKET];
 int keys[NKEYS];
 int nthread = 1;
 
+pthread_mutex_t lock[NBUCKET]; // 为每个散列桶设置一个锁
 
 double
 now()
@@ -52,9 +53,10 @@ void put(int key, int value)
     e->value = value;
   } else {
     // the new is new.
-    insert(key, value, &table[i], table[i]);
+        pthread_mutex_lock(&lock[i]); // 对第i个bucket加锁  Added
+        insert(key, value, &table[i], table[i]);
+        pthread_mutex_unlock(&lock[i]); // 解锁  Added
   }
-
 }
 
 static struct entry*
