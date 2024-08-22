@@ -103,7 +103,32 @@ e1000_transmit(struct mbuf *m)
   // a pointer so that it can be freed after sending.
   //
   
-  return 0;
+  acquire(&e1000_lock); // 获取锁，确保线程安全
+
+  int index = regs[E1000_TDT]; // 读取 E1000_TDT 控制寄存器，获取下一个数据包的 TX 环索引
+
+  if ((tx_ring[index].status & E1000_TXD_STAT_DD) == 0) { // 检查是否还在发送中
+      release(&e1000_lock);
+      return -1; // 返回错误代码
+  }
+
+  if (tx_mbufs[index]) // 如果上一个数据包存在，则释放它
+      mbuffree(tx_mbufs[index]);
+
+  tx_mbufs[index] = m; // 保存当前数据包的 mbuf 指针
+  tx_ring[index].length = m->len; // 设置数据包长度
+  tx_ring[index].addr = (uint64)m->head; // 设置数据包的地址
+
+  // E1000_TXD_CMD_RS 表示报告状态位，表示发送完数据包后会产生中断以报告状态
+  // E1000_TXD_CMD_EOP 表示结束位，表示这是数据包的最后一个描述符。
+  tx_ring[index].cmd = E1000_TXD_CMD_RS | E1000_TXD_CMD_EOP;
+  // 更新 E1000_TDT 控制寄存器，指向下一个数据包的发送环索引
+  // 由于是环形结构，所以进行取模运算
+
+  regs[E1000_TDT] = (index + 1) % TX_RING_SIZE;
+  release(&e1000_lock); // 释放锁，解除线程互斥
+    
+  return 0; // 返回成功代码
 }
 
 static void
@@ -115,6 +140,29 @@ e1000_recv(void)
   // Check for packets that have arrived from the e1000
   // Create and deliver an mbuf for each packet (using net_rx()).
   //
+  
+  while (1) {
+        // 计算下一个数据包在 RX 环中的索引
+        int index = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+
+        if ((rx_ring[index].status & E1000_RXD_STAT_DD) == 0) {
+            // 数据包尚未准备好
+            return; // 结束循环
+        }
+        // 设置 mbuf 的长度
+        rx_mbufs[index]->len = rx_ring[index].length;
+
+        // 传递数据包至上层
+        net_rx(rx_mbufs[index]);
+
+        // 重新分配一个新的 mbuf 用于下一个数据包
+        rx_mbufs[index] = mbufalloc(0);
+        // 重置当前数据包的状态和地址
+        rx_ring[index].status = 0;
+        rx_ring[index].addr = (uint64)rx_mbufs[index]->head;
+        // 更新 E1000_RDT 控制寄存器，指向下一个未处理数据包的索引
+        regs[E1000_RDT] = index;
+    }
 }
 
 void
